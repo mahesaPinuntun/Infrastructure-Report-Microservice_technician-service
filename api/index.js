@@ -47,6 +47,9 @@ app.post(
   upload.array('progressPhotos', 5),
   technicianController.uploadProgressPhoto
 );
+app.get('/', (req, res) => {
+  res.json({ status: "Technician Service Active", port: process.env.PORT || 8004 });
+});
 
 app.get('/api/technician/health', (req, res) => {
   res.json({ status: "Technician Service Active", port: process.env.PORT || 8004 });
