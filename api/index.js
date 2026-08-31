@@ -48,7 +48,14 @@ app.post(
   technicianController.uploadProgressPhoto
 );
 app.get('/', (req, res) => {
-  res.json({ status: "Technician Service Active", port: process.env.PORT || 8004 });
+  res.json({ 
+    serviceName : "Infrastructure-Report Technician Service"
+    status: "Technician Service Active", 
+    port: process.env.PORT || 8004 ,
+    serviceRole : "Technician",
+    versionType : alpha,
+    versionNumber : 0.0.1
+  });
 });
 
 app.get('/api/technician/health', (req, res) => {
