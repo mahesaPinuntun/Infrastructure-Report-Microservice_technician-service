@@ -54,7 +54,7 @@ app.get('/', (req, res) => {
     port: process.env.PORT || "",//8004 ,
     serviceRole : "Technician",
     versionType : alpha,
-    versionNumber : 0.0.1
+    versionNumber : "0.0.1"
   });
 });
 
