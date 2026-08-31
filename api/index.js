@@ -49,9 +49,9 @@ app.post(
 );
 app.get('/', (req, res) => {
   res.json({ 
-    serviceName : "Infrastructure-Report Technician Service"
+    serviceName : "Infrastructure-Report Technician Service",
     status: "Technician Service Active", 
-    port: process.env.PORT || 8004 ,
+    port: process.env.PORT || "",//8004 ,
     serviceRole : "Technician",
     versionType : alpha,
     versionNumber : 0.0.1
