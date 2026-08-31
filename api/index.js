@@ -53,7 +53,7 @@ app.get('/', (req, res) => {
     status: "Technician Service Active", 
     port: process.env.PORT || "",//8004 ,
     serviceRole : "Technician",
-    versionType : alpha,
+    versionType : "alpha",
     versionNumber : "0.0.1"
   });
 });
