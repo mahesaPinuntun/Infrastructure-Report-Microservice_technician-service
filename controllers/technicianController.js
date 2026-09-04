@@ -5,9 +5,18 @@ const { cloudinary } = require('../config/cloudinary');
 const notifyAssignedTechnicians = (io, workOrder, eventData = {}) => {
   if (!io || !workOrder) return;
 
-  const assignedIds = workOrder.assignedTechnicianIds || [];
-  assignedIds.forEach((techId) => {
-    const roomId = `technician_${techId.toString()}`;
+  // Ambil gabungan ID dari assignedTechnicianIds dan sub-document technicians agar tidak ada teknisi yang terlewat
+  const idsFromAssigned = workOrder.assignedTechnicianIds || [];
+  const idsFromTechs = (workOrder.technicians || [])
+    .map((t) => t.technicianId)
+    .filter(Boolean);
+
+  const uniqueTechIds = Array.from(
+    new Set([...idsFromAssigned, ...idsFromTechs].map((id) => id.toString()))
+  );
+
+  uniqueTechIds.forEach((techId) => {
+    const roomId = `technician_${techId}`;
     io.to(roomId).emit('TECHNICIAN_WORK_ORDER_UPDATED', {
       workOrderId: workOrder._id,
       woCode: workOrder.woCode,
@@ -49,22 +58,22 @@ exports.getAssignedJobs = async (req, res) => {
         .skip(skip)
         .limit(limit)
         .populate('managerId', 'name department email')
-        .populate('reportId') // Populasikan data penuh Laporan Infrastruktur
+        .populate('reportId')
         .lean(),
       WorkOrder.countDocuments(query)
     ]);
 
-    res.json({
+    return res.json({
       data: jobs,
-      meta: { 
-        currentPage: page, 
-        pageSize: limit, 
-        totalPages: Math.ceil(total / limit), 
-        totalRecords: total 
+      meta: {
+        currentPage: page,
+        pageSize: limit,
+        totalPages: Math.ceil(total / limit),
+        totalRecords: total
       }
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: error.message });
   }
 };
 
@@ -76,11 +85,11 @@ exports.updateJobStatus = async (req, res) => {
 
     const validStatuses = ['ACCEPTED', 'IN_PROGRESS', 'COMPLETED'];
     if (!validStatuses.includes(status)) {
-      return res.status(400).json({ error: "Invalid status state transition." });
+      return res.status(400).json({ error: 'Invalid status state transition.' });
     }
 
     const workOrder = await WorkOrder.findById(workOrderId);
-    if (!workOrder) return res.status(404).json({ error: "Work Order not found." });
+    if (!workOrder) return res.status(404).json({ error: 'Work Order not found.' });
 
     const technicianId = req.user.id || req.user._id;
     const technicianEmail = req.user.email;
@@ -88,10 +97,12 @@ exports.updateJobStatus = async (req, res) => {
     // Lock Record Access
     const isAssigned =
       workOrder.assignedTechnicianIds?.some((id) => id.toString() === technicianId.toString()) ||
-      workOrder.technicians?.some((t) => t.email === technicianEmail || t.technicianId?.toString() === technicianId.toString());
+      workOrder.technicians?.some(
+        (t) => t.email === technicianEmail || t.technicianId?.toString() === technicianId.toString()
+      );
 
     if (!isAssigned) {
-      return res.status(403).json({ error: "Forbidden: You are not assigned to this job order." });
+      return res.status(403).json({ error: 'Forbidden: You are not assigned to this job order.' });
     }
 
     workOrder.status = status;
@@ -101,16 +112,18 @@ exports.updateJobStatus = async (req, res) => {
       await Report.findByIdAndUpdate(workOrder.reportId, { status: 'repaired' });
     }
 
-    // Kirim notifikasi Socket.IO ke room personal teknisi & dashboard
-    notifyAssignedTechnicians(req.io, workOrder, {
-      type: 'STATUS_CHANGED',
-      updatedBy: technicianId
-    });
-    req.io.emit('WORK_ORDER_STATUS_UPDATED', { workOrderId, status, updatedBy: technicianId });
+    // Kirim notifikasi Socket.IO ke room personal teknisi & broadcast dashboard secara aman
+    if (req.io) {
+      notifyAssignedTechnicians(req.io, workOrder, {
+        type: 'STATUS_CHANGED',
+        updatedBy: technicianId
+      });
+      req.io.emit('WORK_ORDER_STATUS_UPDATED', { workOrderId, status, updatedBy: technicianId });
+    }
 
-    res.json({ message: `Job order status updated to ${status}.`, workOrder });
+    return res.json({ message: `Job order status updated to ${status}.`, workOrder });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: error.message });
   }
 };
 
@@ -120,11 +133,11 @@ exports.uploadProgressPhoto = async (req, res) => {
     const { workOrderId } = req.params;
 
     if (!req.files || req.files.length === 0) {
-      return res.status(400).json({ error: "At least one progress image is required." });
+      return res.status(400).json({ error: 'At least one progress image is required.' });
     }
 
     const workOrder = await WorkOrder.findById(workOrderId);
-    if (!workOrder) return res.status(404).json({ error: "Work Order not found." });
+    if (!workOrder) return res.status(404).json({ error: 'Work Order not found.' });
 
     const technicianId = req.user.id || req.user._id;
     const technicianEmail = req.user.email;
@@ -132,10 +145,12 @@ exports.uploadProgressPhoto = async (req, res) => {
     // Lock Record Access
     const isAssigned =
       workOrder.assignedTechnicianIds?.some((id) => id.toString() === technicianId.toString()) ||
-      workOrder.technicians?.some((t) => t.email === technicianEmail || t.technicianId?.toString() === technicianId.toString());
+      workOrder.technicians?.some(
+        (t) => t.email === technicianEmail || t.technicianId?.toString() === technicianId.toString()
+      );
 
     if (!isAssigned) {
-      return res.status(403).json({ error: "Forbidden: You are not assigned to this job order." });
+      return res.status(403).json({ error: 'Forbidden: You are not assigned to this job order.' });
     }
 
     for (const file of req.files) {
@@ -154,15 +169,20 @@ exports.uploadProgressPhoto = async (req, res) => {
 
     await workOrder.save();
 
-    // Kirim notifikasi Socket.IO ke room personal teknisi & dashboard
-    notifyAssignedTechnicians(req.io, workOrder, {
-      type: 'PROGRESS_PHOTO_ADDED',
+    // Kirim notifikasi Socket.IO ke room personal teknisi & broadcast dashboard secara aman
+    if (req.io) {
+      notifyAssignedTechnicians(req.io, workOrder, {
+        type: 'PROGRESS_PHOTO_ADDED',
+        progressImages: workOrder.progressImages
+      });
+      req.io.emit('PROGRESS_PHOTO_ADDED', { workOrderId, progressImages: workOrder.progressImages });
+    }
+
+    return res.json({
+      message: 'Progress photos uploaded successfully.',
       progressImages: workOrder.progressImages
     });
-    req.io.emit('PROGRESS_PHOTO_ADDED', { workOrderId, progressImages: workOrder.progressImages });
-
-    res.json({ message: "Progress photos uploaded successfully.", progressImages: workOrder.progressImages });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: error.message });
   }
 };
