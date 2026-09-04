@@ -1,14 +1,47 @@
 const { WorkOrder, Report } = require('../models/Schemas');
 const { cloudinary } = require('../config/cloudinary');
 
-// 1. Ambil daftar Job Order yang ditugaskan ke Teknisi ini (#7, #21)
+// Helper untuk mengirimkan notifikasi Socket.IO ke room personal setiap teknisi
+const notifyAssignedTechnicians = (io, workOrder, eventData = {}) => {
+  if (!io || !workOrder) return;
+
+  const assignedIds = workOrder.assignedTechnicianIds || [];
+  assignedIds.forEach((techId) => {
+    const roomId = `technician_${techId.toString()}`;
+    io.to(roomId).emit('TECHNICIAN_WORK_ORDER_UPDATED', {
+      workOrderId: workOrder._id,
+      woCode: workOrder.woCode,
+      locationName: workOrder.locationName,
+      status: workOrder.status,
+      executionDate: workOrder.executionDate,
+      updatedAt: new Date(),
+      ...eventData
+    });
+  });
+};
+
+// 1. Ambil daftar Job Order / Mission List Teknisi (Paginated + Populate Infrastructure Report)
 exports.getAssignedJobs = async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 10)); // #17 Trim API response
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 10));
     const skip = (page - 1) * limit;
 
-    const query = { assignedTechnicianIds: req.user.id };
+    const technicianId = req.user.id || req.user._id;
+    const technicianEmail = req.user.email;
+
+    // Filter misi berdasarkan assignedTechnicianIds ATAU sub-document technicians
+    const query = {
+      $or: [
+        { assignedTechnicianIds: technicianId },
+        { 'technicians.technicianId': technicianId },
+        { 'technicians.email': technicianEmail }
+      ]
+    };
+
+    if (req.query.status) {
+      query.status = req.query.status.toUpperCase();
+    }
 
     const [jobs, total] = await Promise.all([
       WorkOrder.find(query)
@@ -16,13 +49,19 @@ exports.getAssignedJobs = async (req, res) => {
         .skip(skip)
         .limit(limit)
         .populate('managerId', 'name department email')
+        .populate('reportId') // Populasikan data penuh Laporan Infrastruktur
         .lean(),
       WorkOrder.countDocuments(query)
     ]);
 
     res.json({
       data: jobs,
-      meta: { currentPage: page, pageSize: limit, totalPages: Math.ceil(total / limit), totalRecords: total }
+      meta: { 
+        currentPage: page, 
+        pageSize: limit, 
+        totalPages: Math.ceil(total / limit), 
+        totalRecords: total 
+      }
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -43,10 +82,14 @@ exports.updateJobStatus = async (req, res) => {
     const workOrder = await WorkOrder.findById(workOrderId);
     if (!workOrder) return res.status(404).json({ error: "Work Order not found." });
 
-    // Lock Record Access (#7) - Pastikan teknisi memang ditugaskan pada pekerjaan ini
-    const isAssigned = workOrder.assignedTechnicianIds.some(
-      (techId) => techId.toString() === req.user.id
-    );
+    const technicianId = req.user.id || req.user._id;
+    const technicianEmail = req.user.email;
+
+    // Lock Record Access
+    const isAssigned =
+      workOrder.assignedTechnicianIds?.some((id) => id.toString() === technicianId.toString()) ||
+      workOrder.technicians?.some((t) => t.email === technicianEmail || t.technicianId?.toString() === technicianId.toString());
+
     if (!isAssigned) {
       return res.status(403).json({ error: "Forbidden: You are not assigned to this job order." });
     }
@@ -54,13 +97,16 @@ exports.updateJobStatus = async (req, res) => {
     workOrder.status = status;
     await workOrder.save();
 
-    // Jika pekerjaan selesai, otomatis ubah status laporan publik menjadi 'repaired'
     if (status === 'COMPLETED' && workOrder.reportId) {
       await Report.findByIdAndUpdate(workOrder.reportId, { status: 'repaired' });
     }
 
-    // Emit event live update ke Admin & Manager Web Dashboard
-    req.io.emit('WORK_ORDER_STATUS_UPDATED', { workOrderId, status, updatedBy: req.user.id });
+    // Kirim notifikasi Socket.IO ke room personal teknisi & dashboard
+    notifyAssignedTechnicians(req.io, workOrder, {
+      type: 'STATUS_CHANGED',
+      updatedBy: technicianId
+    });
+    req.io.emit('WORK_ORDER_STATUS_UPDATED', { workOrderId, status, updatedBy: technicianId });
 
     res.json({ message: `Job order status updated to ${status}.`, workOrder });
   } catch (error) {
@@ -80,15 +126,18 @@ exports.uploadProgressPhoto = async (req, res) => {
     const workOrder = await WorkOrder.findById(workOrderId);
     if (!workOrder) return res.status(404).json({ error: "Work Order not found." });
 
-    // Lock Record Access (#7)
-    const isAssigned = workOrder.assignedTechnicianIds.some(
-      (techId) => techId.toString() === req.user.id
-    );
+    const technicianId = req.user.id || req.user._id;
+    const technicianEmail = req.user.email;
+
+    // Lock Record Access
+    const isAssigned =
+      workOrder.assignedTechnicianIds?.some((id) => id.toString() === technicianId.toString()) ||
+      workOrder.technicians?.some((t) => t.email === technicianEmail || t.technicianId?.toString() === technicianId.toString());
+
     if (!isAssigned) {
       return res.status(403).json({ error: "Forbidden: You are not assigned to this job order." });
     }
 
-    // Upload images to Cloudinary
     for (const file of req.files) {
       const uploadResult = await new Promise((resolve, reject) => {
         const stream = cloudinary.uploader.upload_stream(
@@ -105,6 +154,11 @@ exports.uploadProgressPhoto = async (req, res) => {
 
     await workOrder.save();
 
+    // Kirim notifikasi Socket.IO ke room personal teknisi & dashboard
+    notifyAssignedTechnicians(req.io, workOrder, {
+      type: 'PROGRESS_PHOTO_ADDED',
+      progressImages: workOrder.progressImages
+    });
     req.io.emit('PROGRESS_PHOTO_ADDED', { workOrderId, progressImages: workOrder.progressImages });
 
     res.json({ message: "Progress photos uploaded successfully.", progressImages: workOrder.progressImages });
