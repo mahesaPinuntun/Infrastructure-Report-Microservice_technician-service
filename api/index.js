@@ -17,6 +17,19 @@ const io = new Server(server, { cors: { origin: "*" } });
 // Rule #18: Security Headers
 app.use(helmet());
 
+// Listener Socket.IO untuk pendaftaran room teknisi
+io.on('connection', (socket) => {
+  // Mobile app teknisi mengirim ID setelah terautentikasi
+  socket.on('JOIN_TECHNICIAN_ROOM', (technicianId) => {
+    if (technicianId) {
+      const roomId = `technician_${technicianId}`;
+      socket.join(roomId);
+    }
+  });
+
+  socket.on('disconnect', () => {});
+});
+
 // Rule #11: Rate Limiter Perangkat Teknisi (Maksimal 60 request per 15 menit)
 const technicianLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -47,11 +60,12 @@ app.post(
   upload.array('progressPhotos', 5),
   technicianController.uploadProgressPhoto
 );
+
 app.get('/', (req, res) => {
   res.json({ 
     serviceName : "Infrastructure-Report Technician Service",
     status: "Technician Service Active", 
-    port: process.env.PORT || "",//8004 ,
+    port: process.env.PORT || "",
     serviceRole : "Technician",
     versionType : "alpha",
     versionNumber : "0.0.1"
