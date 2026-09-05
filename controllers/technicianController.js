@@ -1,15 +1,20 @@
-const { WorkOrder, Report } = require('../models/Schemas');
+const { WorkOrder, Report, Notification } = require('../models/Schemas'); // 🟢 Tambahkan Notification
 const { cloudinary } = require('../config/cloudinary');
 
-// 1. Ambil daftar Job Order / Mission List Teknisi (Paginated + Populate Infrastructure Report)
+// 1. Ambil daftar Job Order / Mission List Teknisi (Paginated + Populate Report)
 exports.getAssignedJobs = async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 10));
     const skip = (page - 1) * limit;
 
-    const technicianId = req.user.id || req.user._id;
-    const technicianEmail = req.user.email;
+    // 🟢 Safe Optional Chaining untuk ekstrak ID & Email Teknisi
+    const technicianId = req.user?.id || req.user?._id || req.user?.userId;
+    const technicianEmail = req.user?.email || '';
+
+    if (!technicianId) {
+      return res.status(401).json({ error: 'Unauthorized: Invalid token payload.' });
+    }
 
     // Filter misi berdasarkan assignedTechnicianIds ATAU sub-document technicians
     const query = {
@@ -29,8 +34,7 @@ exports.getAssignedJobs = async (req, res) => {
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
-        .populate('managerId', 'name department email')
-        .populate('reportId')
+        .populate('reportId') // 🟢 DIBERSIHKAN: Hapus .populate('managerId') untuk cegah Error 500
         .lean(),
       WorkOrder.countDocuments(query)
     ]);
@@ -45,6 +49,7 @@ exports.getAssignedJobs = async (req, res) => {
       }
     });
   } catch (error) {
+    console.error('[technician-service] getAssignedJobs Error:', error);
     return res.status(500).json({ error: error.message });
   }
 };
@@ -63,14 +68,14 @@ exports.updateJobStatus = async (req, res) => {
     const workOrder = await WorkOrder.findById(workOrderId);
     if (!workOrder) return res.status(404).json({ error: 'Work Order not found.' });
 
-    const technicianId = req.user.id || req.user._id;
-    const technicianEmail = req.user.email;
+    const technicianId = req.user?.id || req.user?._id || req.user?.userId;
+    const technicianEmail = req.user?.email || '';
 
     // Lock Record Access
     const isAssigned =
-      workOrder.assignedTechnicianIds?.some((id) => id.toString() === technicianId.toString()) ||
+      workOrder.assignedTechnicianIds?.some((id) => id.toString() === technicianId?.toString()) ||
       workOrder.technicians?.some(
-        (t) => t.email === technicianEmail || t.technicianId?.toString() === technicianId.toString()
+        (t) => t.email === technicianEmail || t.technicianId?.toString() === technicianId?.toString()
       );
 
     if (!isAssigned) {
@@ -102,14 +107,14 @@ exports.uploadProgressPhoto = async (req, res) => {
     const workOrder = await WorkOrder.findById(workOrderId);
     if (!workOrder) return res.status(404).json({ error: 'Work Order not found.' });
 
-    const technicianId = req.user.id || req.user._id;
-    const technicianEmail = req.user.email;
+    const technicianId = req.user?.id || req.user?._id || req.user?.userId;
+    const technicianEmail = req.user?.email || '';
 
     // Lock Record Access
     const isAssigned =
-      workOrder.assignedTechnicianIds?.some((id) => id.toString() === technicianId.toString()) ||
+      workOrder.assignedTechnicianIds?.some((id) => id.toString() === technicianId?.toString()) ||
       workOrder.technicians?.some(
-        (t) => t.email === technicianEmail || t.technicianId?.toString() === technicianId.toString()
+        (t) => t.email === technicianEmail || t.technicianId?.toString() === technicianId?.toString()
       );
 
     if (!isAssigned) {
@@ -137,6 +142,43 @@ exports.uploadProgressPhoto = async (req, res) => {
       progressImages: workOrder.progressImages
     });
   } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+};
+
+// 🟢 4. Ambil Daftar Notifikasi Teknisi (Diperlukan oleh Mobile App Polling - Cegah Error 404)
+exports.getNotifications = async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 10));
+    const skip = (page - 1) * limit;
+
+    const recipientId = req.user?.id || req.user?._id || req.user?.userId;
+
+    const query = { recipientId };
+
+    const [notifications, total, unreadCount] = await Promise.all([
+      Notification.find(query)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Notification.countDocuments(query),
+      Notification.countDocuments({ recipientId, isRead: false })
+    ]);
+
+    return res.json({
+      data: notifications,
+      meta: {
+        currentPage: page,
+        pageSize: limit,
+        totalPages: Math.ceil(total / limit),
+        totalRecords: total,
+        unreadCount
+      }
+    });
+  } catch (error) {
+    console.error('[technician-service] getNotifications Error:', error);
     return res.status(500).json({ error: error.message });
   }
 };
