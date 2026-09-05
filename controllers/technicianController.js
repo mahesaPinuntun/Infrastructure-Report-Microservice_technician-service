@@ -1,34 +1,6 @@
 const { WorkOrder, Report } = require('../models/Schemas');
 const { cloudinary } = require('../config/cloudinary');
 
-// Helper untuk mengirimkan notifikasi Socket.IO ke room personal setiap teknisi
-const notifyAssignedTechnicians = (io, workOrder, eventData = {}) => {
-  if (!io || !workOrder) return;
-
-  // Ambil gabungan ID dari assignedTechnicianIds dan sub-document technicians agar tidak ada teknisi yang terlewat
-  const idsFromAssigned = workOrder.assignedTechnicianIds || [];
-  const idsFromTechs = (workOrder.technicians || [])
-    .map((t) => t.technicianId)
-    .filter(Boolean);
-
-  const uniqueTechIds = Array.from(
-    new Set([...idsFromAssigned, ...idsFromTechs].map((id) => id.toString()))
-  );
-
-  uniqueTechIds.forEach((techId) => {
-    const roomId = `technician_${techId}`;
-    io.to(roomId).emit('TECHNICIAN_WORK_ORDER_UPDATED', {
-      workOrderId: workOrder._id,
-      woCode: workOrder.woCode,
-      locationName: workOrder.locationName,
-      status: workOrder.status,
-      executionDate: workOrder.executionDate,
-      updatedAt: new Date(),
-      ...eventData
-    });
-  });
-};
-
 // 1. Ambil daftar Job Order / Mission List Teknisi (Paginated + Populate Infrastructure Report)
 exports.getAssignedJobs = async (req, res) => {
   try {
@@ -112,15 +84,6 @@ exports.updateJobStatus = async (req, res) => {
       await Report.findByIdAndUpdate(workOrder.reportId, { status: 'repaired' });
     }
 
-    // Kirim notifikasi Socket.IO ke room personal teknisi & broadcast dashboard secara aman
-    if (req.io) {
-      notifyAssignedTechnicians(req.io, workOrder, {
-        type: 'STATUS_CHANGED',
-        updatedBy: technicianId
-      });
-      req.io.emit('WORK_ORDER_STATUS_UPDATED', { workOrderId, status, updatedBy: technicianId });
-    }
-
     return res.json({ message: `Job order status updated to ${status}.`, workOrder });
   } catch (error) {
     return res.status(500).json({ error: error.message });
@@ -168,15 +131,6 @@ exports.uploadProgressPhoto = async (req, res) => {
     }
 
     await workOrder.save();
-
-    // Kirim notifikasi Socket.IO ke room personal teknisi & broadcast dashboard secara aman
-    if (req.io) {
-      notifyAssignedTechnicians(req.io, workOrder, {
-        type: 'PROGRESS_PHOTO_ADDED',
-        progressImages: workOrder.progressImages
-      });
-      req.io.emit('PROGRESS_PHOTO_ADDED', { workOrderId, progressImages: workOrder.progressImages });
-    }
 
     return res.json({
       message: 'Progress photos uploaded successfully.',
