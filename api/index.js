@@ -19,13 +19,13 @@ app.use(express.json());
 // Database Connection
 connectDB();
 
-// Rate Limiter Perangkat Teknisi (Maksimal 60 request per 15 menit)
+// Rate Limiter Perangkat Teknisi (Ditingkatkan ke 1200 req / 15 min untuk mendukung Adaptive Polling)
 const technicianLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 60,
+  max: 1200,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { error: 'Terlalu banyak aktivitas dari perangkat teknisi. Silakan tunggu 15 menit.' }
+  message: { error: 'Terlalu banyak aktivitas dari perangkat teknisi. Silakan tunggu beberapa saat.' }
 });
 
 // Middleware Proteksi Header Internal Secret (Khusus dipanggil oleh manager-service)
@@ -62,8 +62,9 @@ app.post(
   technicianController.uploadProgressPhoto
 );
 
-// In-App Notification Routes (Untuk melihat riwayat & mark as read)
+// In-App Notification Routes (Mendukung Polling, Mark Read Satuan & Massal)
 app.get('/api/technician/notifications', verifyTechnicianToken, notificationController.getTechnicianNotifications);
+app.patch('/api/technician/notifications/read-all', verifyTechnicianToken, notificationController.markAllNotificationsAsRead);
 app.patch('/api/technician/notifications/:id/read', verifyTechnicianToken, notificationController.markNotificationAsRead);
 
 // Health Check & Root
