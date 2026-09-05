@@ -1,16 +1,8 @@
 const { Notification } = require('../models/Schemas');
 
-const INTERNAL_SECRET = process.env.INTERNAL_SECRET || 'super-secret-key-123';
-
 // 1. Dipanggil oleh manager-service via POST /api/internal/notifications
 exports.createInternalNotification = async (req, res) => {
   try {
-    // Validasi rahasia internal antar-service Vercel
-    const secretHeader = req.headers['x-internal-secret'];
-    if (!secretHeader || secretHeader !== INTERNAL_SECRET) {
-      return res.status(401).json({ error: 'Unauthorized: Invalid internal secret.' });
-    }
-
     const { assignedTechnicianIds, title, message, workOrderId, type } = req.body;
 
     if (!assignedTechnicianIds || !Array.isArray(assignedTechnicianIds) || assignedTechnicianIds.length === 0) {
@@ -34,7 +26,7 @@ exports.createInternalNotification = async (req, res) => {
   }
 };
 
-// 2. Diambil oleh Mobile App Teknisi via GET /api/technician/notifications (Digunakan untuk Adaptive Polling)
+// 2. Diambil oleh Mobile App Teknisi via GET /api/technician/notifications (Adaptive Polling)
 exports.getTechnicianNotifications = async (req, res) => {
   try {
     const technicianId = req.user.id || req.user._id;
