@@ -1,0 +1,82 @@
+const { Notification } = require('../models/Schemas');
+
+// 1. Ditolong oleh manager-service via POST /api/internal/notifications
+exports.createInternalNotification = async (req, res) => {
+  try {
+    const { assignedTechnicianIds, title, message, workOrderId, type } = req.body;
+
+    if (!assignedTechnicianIds || !Array.isArray(assignedTechnicianIds) || assignedTechnicianIds.length === 0) {
+      return res.status(400).json({ error: 'assignedTechnicianIds array is required.' });
+    }
+
+    const notifications = assignedTechnicianIds.map((techId) => ({
+      technicianId: techId,
+      title,
+      message,
+      type: type || 'NEW_WORK_ORDER',
+      workOrderId: workOrderId || null,
+      isRead: false
+    }));
+
+    await Notification.insertMany(notifications);
+
+    return res.status(201).json({ success: true, message: 'Notifications stored successfully.' });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+};
+
+// 2. Diambil oleh Mobile App Teknisi via GET /api/technician/notifications
+exports.getTechnicianNotifications = async (req, res) => {
+  try {
+    const technicianId = req.user.id || req.user._id;
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 20));
+    const skip = (page - 1) * limit;
+
+    const [notifications, total, unreadCount] = await Promise.all([
+      Notification.find({ technicianId })
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Notification.countDocuments({ technicianId }),
+      Notification.countDocuments({ technicianId, isRead: false })
+    ]);
+
+    return res.json({
+      data: notifications,
+      meta: {
+        currentPage: page,
+        pageSize: limit,
+        totalPages: Math.ceil(total / limit),
+        totalRecords: total,
+        unreadCount
+      }
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+};
+
+// 3. Ditandai Dibaca via PATCH /api/technician/notifications/:id/read
+exports.markNotificationAsRead = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const technicianId = req.user.id || req.user._id;
+
+    const notification = await Notification.findOneAndUpdate(
+      { _id: id, technicianId },
+      { isRead: true },
+      { new: true }
+    );
+
+    if (!notification) {
+      return res.status(404).json({ error: 'Notification not found.' });
+    }
+
+    return res.json({ message: 'Notification marked as read.', notification });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+};
