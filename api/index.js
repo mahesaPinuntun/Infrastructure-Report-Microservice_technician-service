@@ -1,36 +1,25 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const http = require('http');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-const { Server } = require('socket.io');
 const connectDB = require('../config/db');
 const { upload } = require('../config/cloudinary');
 const verifyTechnicianToken = require('../middleware/auth');
 const technicianController = require('../controllers/technicianController');
+const notificationController = require('../controllers/notificationController');
 
 const app = express();
-const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
 
-// Rule #18: Security Headers
+// Security & Base Middlewares
 app.use(helmet());
+app.use(cors());
+app.use(express.json());
 
-// Listener Socket.IO untuk pendaftaran room teknisi
-io.on('connection', (socket) => {
-  // Mobile app teknisi mengirim ID setelah terautentikasi
-  socket.on('JOIN_TECHNICIAN_ROOM', (technicianId) => {
-    if (technicianId) {
-      const roomId = `technician_${technicianId}`;
-      socket.join(roomId);
-    }
-  });
+// Database Connection
+connectDB();
 
-  socket.on('disconnect', () => {});
-});
-
-// Rule #11: Rate Limiter Perangkat Teknisi (Maksimal 60 request per 15 menit)
+// Rate Limiter Perangkat Teknisi (Maksimal 60 request per 15 menit)
 const technicianLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 60,
@@ -39,19 +28,31 @@ const technicianLimiter = rateLimit({
   message: { error: 'Terlalu banyak aktivitas dari perangkat teknisi. Silakan tunggu 15 menit.' }
 });
 
-app.use('/api/technician', technicianLimiter);
-app.use(cors());
-app.use(express.json());
-
-connectDB();
-
-// Inject Socket.io ke dalam Request Object
-app.use((req, res, next) => {
-  req.io = io;
+// Middleware Proteksi Header Internal Secret (Khusus dipanggil oleh manager-service)
+const verifyInternalSecret = (req, res, next) => {
+  const secret = req.headers['x-internal-secret'];
+  const expectedSecret = process.env.INTERNAL_SECRET || 'super-secret-key-123';
+  if (!secret || secret !== expectedSecret) {
+    return res.status(401).json({ error: 'Unauthorized internal service request.' });
+  }
   next();
-});
+};
 
-// Technician Routes
+// =============================================================================
+// 1. ENDPOINT INTERNAL (Dipanggil oleh manager-service dari Vercel)
+// =============================================================================
+app.post(
+  '/api/internal/notifications',
+  verifyInternalSecret,
+  notificationController.createInternalNotification
+);
+
+// =============================================================================
+// 2. ENDPOINT TECHNICIAN (Dipanggil oleh Mobile App Teknisi)
+// =============================================================================
+app.use('/api/technician', technicianLimiter);
+
+// Job Order Routes
 app.get('/api/technician/jobs', verifyTechnicianToken, technicianController.getAssignedJobs);
 app.patch('/api/technician/jobs/:workOrderId/status', verifyTechnicianToken, technicianController.updateJobStatus);
 app.post(
@@ -61,14 +62,19 @@ app.post(
   technicianController.uploadProgressPhoto
 );
 
+// In-App Notification Routes (Untuk melihat riwayat & mark as read)
+app.get('/api/technician/notifications', verifyTechnicianToken, notificationController.getTechnicianNotifications);
+app.patch('/api/technician/notifications/:id/read', verifyTechnicianToken, notificationController.markNotificationAsRead);
+
+// Health Check & Root
 app.get('/', (req, res) => {
   res.json({ 
-    serviceName : "Infrastructure-Report Technician Service",
+    serviceName: "Infrastructure-Report Technician Service",
     status: "Technician Service Active", 
     port: process.env.PORT || "",
-    serviceRole : "Technician",
-    versionType : "alpha",
-    versionNumber : "0.0.1"
+    serviceRole: "Technician",
+    versionType: "alpha",
+    versionNumber: "0.0.1"
   });
 });
 
@@ -78,7 +84,7 @@ app.get('/api/technician/health', (req, res) => {
 
 if (process.env.NODE_ENV !== 'production') {
   const PORT = process.env.PORT || 8004;
-  server.listen(PORT, () => console.log(`Technician Service running on port ${PORT}`));
+  app.listen(PORT, () => console.log(`Technician Service running on port ${PORT}`));
 }
 
 module.exports = app;
