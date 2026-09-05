@@ -1,8 +1,16 @@
 const { Notification } = require('../models/Schemas');
 
-// 1. Ditolong oleh manager-service via POST /api/internal/notifications
+const INTERNAL_SECRET = process.env.INTERNAL_SECRET || 'super-secret-key-123';
+
+// 1. Dipanggil oleh manager-service via POST /api/internal/notifications
 exports.createInternalNotification = async (req, res) => {
   try {
+    // Validasi rahasia internal antar-service Vercel
+    const secretHeader = req.headers['x-internal-secret'];
+    if (!secretHeader || secretHeader !== INTERNAL_SECRET) {
+      return res.status(401).json({ error: 'Unauthorized: Invalid internal secret.' });
+    }
+
     const { assignedTechnicianIds, title, message, workOrderId, type } = req.body;
 
     if (!assignedTechnicianIds || !Array.isArray(assignedTechnicianIds) || assignedTechnicianIds.length === 0) {
@@ -26,7 +34,7 @@ exports.createInternalNotification = async (req, res) => {
   }
 };
 
-// 2. Diambil oleh Mobile App Teknisi via GET /api/technician/notifications
+// 2. Diambil oleh Mobile App Teknisi via GET /api/technician/notifications (Digunakan untuk Adaptive Polling)
 exports.getTechnicianNotifications = async (req, res) => {
   try {
     const technicianId = req.user.id || req.user._id;
@@ -59,7 +67,7 @@ exports.getTechnicianNotifications = async (req, res) => {
   }
 };
 
-// 3. Ditandai Dibaca via PATCH /api/technician/notifications/:id/read
+// 3. Ditandai Dibaca Satuan via PATCH /api/technician/notifications/:id/read
 exports.markNotificationAsRead = async (req, res) => {
   try {
     const { id } = req.params;
@@ -76,6 +84,22 @@ exports.markNotificationAsRead = async (req, res) => {
     }
 
     return res.json({ message: 'Notification marked as read.', notification });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+};
+
+// 4. Ditandai Dibaca Semua via PATCH /api/technician/notifications/read-all
+exports.markAllNotificationsAsRead = async (req, res) => {
+  try {
+    const technicianId = req.user.id || req.user._id;
+
+    await Notification.updateMany(
+      { technicianId, isRead: false },
+      { $set: { isRead: true } }
+    );
+
+    return res.json({ success: true, message: 'All notifications marked as read.' });
   } catch (error) {
     return res.status(500).json({ error: error.message });
   }
